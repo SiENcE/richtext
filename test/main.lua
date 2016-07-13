@@ -1,6 +1,6 @@
 local rich = require 'richtext'
 
-message = [[
+local message = [[
 {Harro_71.png} Hello, {green}im {red}{fontBig}Harro.{fontMed}
 {white}UTF8 german: {green}Ähnlichkeit mit Übungen ist Öffentlich.
 {fontCyrillic}{white}UTF8 cyrillic: {red}а б в г д е ё ж з и й к л м н о
@@ -32,10 +32,8 @@ macros['Harro_71.png'] = love.graphics.newImage('Harro_71.png')
 
 local rt = nil
 
---if arg[#arg] == "-debug" then require("mobdebug").start() end
-
 function love.load()
-	rt = rich:new{ message, 500, macros }
+	rt = rich:new( {message, 500, macros}, macros.white, macros.fontMed )
 end
 
 function love.draw()

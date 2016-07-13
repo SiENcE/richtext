@@ -3,6 +3,7 @@
 --[[
 Copyright (c) 2010 Robin Wellner
 Copyright (c) 2014 Florian Fischer (class changes, initial color, ...)
+Copyright (c) 2016 Florian Fischer (non-canvas render bugfix, linecalc bugfix, ...)
 
 This software is provided 'as-is', without any express or implied
 warranty. In no event will the authors be held liable for any damages
@@ -28,32 +29,50 @@ freely, subject to the following restrictions:
 --  * still under-tested
 --  * word wrapping might not be optimal
 --  * words keep their final space in wrapping, which may cause words to be wrapped too soon
+--  * richtext without canvas have problems getting the correct sizes of fonts and display the choices on the wrong place
 
 local rich = {}
 rich.__index = rich
 
-function rich:new(t, stdcolor) -- syntax: rt = rich.new{text, width, resource1 = ..., ...}
+function rich:new(t, defaultcolor, defaultfont) -- syntax: rt = rich.new{text, width, resource1 = ..., ...}
 	local obj = setmetatable({parsedtext = {}, resources = {}}, rich)
 	obj.width = t[2]
 	obj.hardwrap = false
+	obj.defaultcolor = defaultcolor
+	obj.defaultfont = defaultfont
 	obj:extract(t)
 	obj:parse(t)
-	-- set text standard color
-	if stdcolor and type(stdcolor) =='table' then love.graphics.setColor( unpack(stdcolor) ) end
 	if love.graphics.isSupported and love.graphics.isSupported('canvas') then
 		obj:render()
 		obj:render(true)
+	else
+		obj:render()
 	end
 	return obj
 end
 
 function rich:draw(x, y)
+	-- use canvas
+	if self.canvas then
+		love.graphics.draw(self.canvas, x, y)
+	else
+		-- fallback if canvases not supported
+		love.graphics.push("all")
+		love.graphics.translate(x, y)
+		self:render()
+		love.graphics.pop()
+	end
+end
+
+--[[
+-- old, sets standard white color, preserves current color, uses blendmode
+function rich:draw(x, y)
 	local firstR, firstG, firstB, firstA = love.graphics.getColor()
 	love.graphics.setColor(255, 255, 255, 255)
 	local prevMode = love.graphics.getBlendMode()
-	if self.framebuffer then
+	if self.canvas then
 		love.graphics.setBlendMode("premultiplied")
-		love.graphics.draw(self.framebuffer, x, y)
+		love.graphics.draw(self.canvas, x, y)
 		love.graphics.setBlendMode(prevMode)
 	else
 		love.graphics.push()
@@ -63,6 +82,7 @@ function rich:draw(x, y)
 	end
 	love.graphics.setColor(firstR, firstG, firstB, firstA)
 end
+]]--
 
 function rich:extract(t)
 	if t[3] and type(t[3]) == 'table' then
@@ -94,7 +114,7 @@ end
 
 function rich:parse(t)
 	local text = t[1]
-	if string.len(text) > 0 then 
+	if string.len(text) > 0 then
 		-- look for {tags} or [tags]
 		for textfragment, foundtag in text:gmatch'([^{]*){(.-)}' do
 			parsefragment(self.parsedtext, textfragment)
@@ -168,7 +188,7 @@ local function wrapText(parsedtext, fragment, lines, maxheight, x, width, i, fnt
 		x = 0
 		table.insert(lines, {})
 	end
-	
+
 	return maxheight, 0
 end
 
@@ -249,6 +269,7 @@ end
 local function doDraw(lines)
 	local y = 0
 	local colorr,colorg,colorb,colora = love.graphics.getColor()
+
 	for i, line in ipairs(lines) do -- do the actual rendering
 		y = y + line.height
 		for j, fragment in ipairs(line) do
@@ -280,32 +301,104 @@ local function doDraw(lines)
 	end
 end
 
-function rich:calcHeight(lines)
+local function calcTextLines(lines)
+	local textlinecount = 0
+	local textlines = {}
+	for key, line in ipairs(lines) do
+		local isline = false
+		for j, fragment in ipairs(line) do
+			if fragment.type == 'string' then
+				if string.len(fragment[1]) > 0 then
+					isline = true
+					break
+				end
+			elseif fragment.type == 'img' then
+				if fragment.height and fragment.height > 0 then
+					isline = true
+					break
+				end
+			end
+		end
+		if isline then
+			textlinecount = textlinecount +1
+			table.insert( textlines, textlinecount, line.height )
+		end
+	end
+	return textlines
+end
+
+local function calcHeight(lines)
 	local h = 0
-	for _, line in ipairs(lines) do
-		h = h + line.height
+	-- wrong: old way of linecalc
+--	for key, line in ipairs(lines) do
+--		h = h + line.height
+--	end
+	for key, line in ipairs(lines) do
+		local isline = false
+		for j, fragment in ipairs(line) do
+			if fragment.type == 'string' then
+				if string.len(fragment[1]) > 0 then
+					isline = true
+					break
+				end
+			elseif fragment.type == 'img' then
+				if fragment.height and fragment.height > 0 then
+					isline = true
+					break
+				end
+			end
+		end
+		if isline then
+			h = h + line.height
+		end
 	end
 	return h
 end
 
-function rich:render(usefb)
+function rich:calcLinesHeight()
 	local renderWidth = self.width or math.huge -- if not given, use no wrapping
-	local firstFont = love.graphics.getFont() or love.graphics.newFont(12)
-	local firstR, firstG, firstB, firstA = love.graphics.getColor()
-	local lines = doRender(self.parsedtext, renderWidth, self.hardwrap)
+	self.lines = doRender(self.parsedtext, renderWidth, self.hardwrap)
+	-- calc textlines tuple(number, height)
+	self.textlines = calcTextLines(self.lines)
+	-- debug
+--	for key, text in ipairs(self.textlines) do
+--		print(key, text)
+--	end
 	-- dirty hack, add half height of last line to bottom of height to ensure tails of y's and g's, etc fit in properly.
-	self.height = self:calcHeight(lines) + math.floor((lines[#lines].height / 2) + 0.5)
-	local fbWidth = math.max(nextpo2(math.max(love.graphics.getWidth(), self.width or 0)), nextpo2(math.max(love.graphics.getHeight(), self.height)))
-	local fbHeight = fbWidth
-	love.graphics.setFont(firstFont)
+	self.height = calcHeight(self.lines) + math.floor((self.lines[#self.lines].height / 2) + 0.5)
+end
+
+function rich:render(usefb)
+	-- save textcolor
+	local firstR, firstG, firstB, firstA = love.graphics.getColor()
+	-- set text standard color
+	if self.defaultcolor and type(self.defaultcolor) == 'table' then love.graphics.setColor( unpack(self.defaultcolor) ) end
+	-- save font
+	local firstFont = love.graphics.getFont() or love.graphics.newFont(12)
+	-- set default font
+	if self.defaultfont and type(self.defaultfont) == 'userdata' then love.graphics.setFont( self.defaultfont ) end
+
+	-- we have to set calcLinesHeight after Font setting, as the sizes of the font are important there!
+	self:calcLinesHeight()
+
 	if usefb then
-		self.framebuffer = love.graphics.newCanvas(fbWidth, fbHeight)
-		self.framebuffer:setFilter( 'nearest', 'nearest' )
-		self.framebuffer:renderTo(function () doDraw(lines) end)
+		local fbWidth = math.max(nextpo2(math.max(love.graphics.getWidth(), self.width or 0)), nextpo2(math.max(love.graphics.getHeight(), self.height)))
+		local fbHeight = fbWidth
+		self.canvas = love.graphics.newCanvas(fbWidth, fbHeight)
+		self.canvas:setFilter( 'linear', 'nearest' )
+		love.graphics.push()
+		love.graphics.origin()
+		self.canvas:renderTo(function ()
+			doDraw(self.lines)
+		end)
+		love.graphics.pop()
 	else
-		self.height = doDraw(lines)
+		doDraw(self.lines)
 	end
+
+	-- reset font
 	love.graphics.setFont(firstFont)
+	-- reset color
 	love.graphics.setColor(firstR, firstG, firstB, firstA)
 end
 
