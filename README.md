@@ -53,6 +53,10 @@ or
 * any initial text color (other than white) has to be specified manually by
   starting text
 
+## Supported LOVE2D versions
+- 0.8.0
+- 0.9.2
+- 0.10.+ needs smaller changes to textinput and other stuff
 
 # license
 
